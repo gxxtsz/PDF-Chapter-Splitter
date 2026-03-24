@@ -380,21 +380,11 @@ def split_pdf(
             new_doc.save(pdf_out_path)
             new_doc.close()
 
-            # Markdown 文件
+            # Markdown 文件（空白）
             md_filename = f"{idx:03d}-{safe_title}.md"
             md_out_path = os.path.join(md_dir, md_filename)
-            # 计算从 md 文件到 pdf 文件的相对路径
-            pdf_rel = os.path.relpath(pdf_out_path, md_dir)
-            md_lines = [f"# {ch.title}", ""]
-            if ch.book_name:
-                md_lines.append(f"- **所属书籍**: {ch.book_name}")
-            if ch.volume_name:
-                md_lines.append(f"- **所属卷**: {ch.volume_name}")
-            md_lines.append(f"- **页码范围**: {start + 1} - {end + 1} ({page_count}页)")
-            md_lines.append(f"- **对应PDF**: [{pdf_filename}]({pdf_rel})")
-            md_lines.append("")
             with open(md_out_path, "w", encoding="utf-8") as f:
-                f.write("\n".join(md_lines))
+                f.write("")
 
             md_rel_path = os.path.relpath(md_out_path, output_dir)
             _log(f"  [{idx:03d}] {page_info} -> {md_rel_path}")
