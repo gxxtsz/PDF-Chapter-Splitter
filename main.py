@@ -12,27 +12,37 @@ from pathlib import Path
 import fitz  # PyMuPDF
 
 
-# ── 层级分类规则 ──────────────────────────────────────────────
+# ── 层级分类规则（默认值） ────────────────────────────────────
 
 # 书籍级关键词
-BOOK_PATTERNS = [
-    re.compile(r"第[一二三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾\d]+[册部]"),
+DEFAULT_BOOK_PATTERNS = [
+    r"第[一二三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾\d]+[册部]",
 ]
 
 # 卷级关键词
-VOLUME_PATTERNS = [
-    re.compile(r"第[一二三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾\d]+[卷篇]"),
+DEFAULT_VOLUME_PATTERNS = [
+    r"第[一二三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾\d]+[卷篇]",
 ]
 
 # 章级关键词
-CHAPTER_PATTERNS = [
-    re.compile(r"第[一二三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾\d]+[章回节讲课话]"),
+DEFAULT_CHAPTER_PATTERNS = [
+    r"第[一二三四五六七八九十百千万壹贰叁肆伍陆柒捌玖拾\d]+[章回节讲课话]",
 ]
 
 # 需要跳过的条目关键词（优先判断，即使匹配了书/卷/章也跳过）
-SKIP_PATTERNS = [
-    re.compile(r"附录"),
+DEFAULT_SKIP_PATTERNS = [
+    r"附录",
 ]
+
+
+def compile_patterns(raw: list[str]) -> list[re.Pattern]:
+    """将字符串列表编译为正则表达式列表，跳过空字符串"""
+    compiled = []
+    for s in raw:
+        s = s.strip()
+        if s:
+            compiled.append(re.compile(s))
+    return compiled
 
 
 class BookmarkNode:
@@ -51,24 +61,36 @@ class BookmarkNode:
                 f"page={self.page}, cat={self.category})")
 
 
-def classify_title(title: str) -> str:
+def classify_title(
+    title: str,
+    book_pats: list[re.Pattern],
+    volume_pats: list[re.Pattern],
+    chapter_pats: list[re.Pattern],
+    skip_pats: list[re.Pattern],
+) -> str:
     """根据标题内容判断属于 book / volume / chapter / skip / unknown"""
-    for pat in SKIP_PATTERNS:
+    for pat in skip_pats:
         if pat.search(title):
             return "skip"
-    for pat in BOOK_PATTERNS:
+    for pat in book_pats:
         if pat.search(title):
             return "book"
-    for pat in VOLUME_PATTERNS:
+    for pat in volume_pats:
         if pat.search(title):
             return "volume"
-    for pat in CHAPTER_PATTERNS:
+    for pat in chapter_pats:
         if pat.search(title):
             return "chapter"
     return "skip"
 
 
-def classify_by_level(nodes: list[BookmarkNode]) -> None:
+def classify_by_level(
+    nodes: list[BookmarkNode],
+    book_pats: list[re.Pattern] | None = None,
+    volume_pats: list[re.Pattern] | None = None,
+    chapter_pats: list[re.Pattern] | None = None,
+    skip_pats: list[re.Pattern] | None = None,
+) -> None:
     """基于书签层级进行分类（作为关键词分类的补充）
 
     策略：
@@ -77,9 +99,20 @@ def classify_by_level(nodes: list[BookmarkNode]) -> None:
       level 1 → book，level 2 → volume，level 3+ → chapter
     - 如果仅有部分命中，用层级信息辅助填充 unknown 节点
     """
+    if book_pats is None:
+        book_pats = compile_patterns(DEFAULT_BOOK_PATTERNS)
+    if volume_pats is None:
+        volume_pats = compile_patterns(DEFAULT_VOLUME_PATTERNS)
+    if chapter_pats is None:
+        chapter_pats = compile_patterns(DEFAULT_CHAPTER_PATTERNS)
+    if skip_pats is None:
+        skip_pats = compile_patterns(DEFAULT_SKIP_PATTERNS)
+
     # 第一轮：关键词分类
     for node in nodes:
-        node.category = classify_title(node.title)
+        node.category = classify_title(
+            node.title, book_pats, volume_pats, chapter_pats, skip_pats
+        )
 
     # 第二轮：将章的子标签标记为 ignore（完全忽略，不参与边界计算）
     in_chapter = False
@@ -226,17 +259,40 @@ def get_chapter_ranges(
     return result
 
 
-def split_pdf(pdf_path: str, output_dir: str | None = None) -> None:
+def split_pdf(
+    pdf_path: str,
+    output_dir: str | None = None,
+    log=None,
+    on_progress=None,
+    book_patterns: list[str] | None = None,
+    volume_patterns: list[str] | None = None,
+    chapter_patterns: list[str] | None = None,
+    skip_patterns: list[str] | None = None,
+) -> str:
     """主入口：拆分PDF文件
 
     Args:
         pdf_path: PDF文件路径
         output_dir: 输出目录，默认为PDF同目录下的同名文件夹
+        log: 可选的日志回调函数 log(msg: str)
+        on_progress: 可选的进度回调 on_progress(current: int, total: int)
+        book_patterns: 自定义书籍级正则列表（原始字符串）
+        volume_patterns: 自定义卷级正则列表
+        chapter_patterns: 自定义章级正则列表
+        skip_patterns: 自定义跳过正则列表
+
+    Returns:
+        输出目录路径
     """
+    def _log(msg: str):
+        if log:
+            log(msg)
+        else:
+            print(msg)
+
     pdf_path = os.path.abspath(pdf_path)
     if not os.path.isfile(pdf_path):
-        print(f"错误：文件不存在 - {pdf_path}")
-        sys.exit(1)
+        raise FileNotFoundError(f"文件不存在 - {pdf_path}")
 
     pdf_name = Path(pdf_path).stem
     if output_dir is None:
@@ -248,33 +304,37 @@ def split_pdf(pdf_path: str, output_dir: str | None = None) -> None:
 
     doc = fitz.open(pdf_path)
     total_pages = len(doc)
-    print(f"打开PDF: {pdf_path}")
-    print(f"总页数: {total_pages}")
+    _log(f"打开PDF: {pdf_path}")
+    _log(f"总页数: {total_pages}")
 
     # 1. 提取书签
     nodes = extract_bookmarks(doc)
     if not nodes:
-        print("错误：该PDF没有书签信息，无法拆分。")
         doc.close()
-        sys.exit(1)
+        raise ValueError("该PDF没有书签信息，无法拆分。")
 
-    print(f"提取到 {len(nodes)} 个书签")
+    _log(f"提取到 {len(nodes)} 个书签")
 
-    # 2. 分类
-    classify_by_level(nodes)
+    # 2. 分类（使用自定义或默认 patterns）
+    book_pats = compile_patterns(book_patterns) if book_patterns else None
+    volume_pats = compile_patterns(volume_patterns) if volume_patterns else None
+    chapter_pats = compile_patterns(chapter_patterns) if chapter_patterns else None
+    skip_pats = compile_patterns(skip_patterns) if skip_patterns else None
+    classify_by_level(nodes, book_pats, volume_pats, chapter_pats, skip_pats)
 
     # 3. 构建层级关系
     build_hierarchy(nodes)
 
     # 打印书签结构
-    print("\n书签结构：")
+    _log("\n书签结构：")
     for n in nodes:
         indent = "  " * (n.level - 1)
-        print(f"  {indent}[{n.category:7s}] {n.title} (p.{n.page + 1})")
+        _log(f"  {indent}[{n.category:7s}] {n.title} (p.{n.page + 1})")
 
     # 4. 计算章节范围
     chapter_ranges = get_chapter_ranges(nodes, total_pages)
-    print(f"\n共 {len(chapter_ranges)} 个章节将被拆分\n")
+    total_chapters = len(chapter_ranges)
+    _log(f"\n共 {total_chapters} 个章节将被拆分\n")
 
     # 5. 拆分并保存
     for idx, (ch, start, end) in enumerate(chapter_ranges, 1):
@@ -298,12 +358,14 @@ def split_pdf(pdf_path: str, output_dir: str | None = None) -> None:
         new_doc.save(out_path)
         new_doc.close()
 
-        page_count = end - start + 1
-        print(f"  [{idx:03d}] p.{start + 1}-{end + 1} ({page_count}页) → {filename}")
+        _log(f"  [{idx:03d}] p.{start + 1}-{end + 1} ({page_count}页) → {filename}")
+        if on_progress:
+            on_progress(idx, total_chapters)
 
     doc.close()
-    print(f"\n拆分完成！共生成 {len(chapter_ranges)} 个文件")
-    print(f"输出目录: {output_dir}")
+    _log(f"\n拆分完成！共生成 {total_chapters} 个文件")
+    _log(f"输出目录: {output_dir}")
+    return output_dir
 
 
 def main():
