@@ -268,6 +268,7 @@ def split_pdf(
     volume_patterns: list[str] | None = None,
     chapter_patterns: list[str] | None = None,
     skip_patterns: list[str] | None = None,
+    hierarchical: bool = False,
 ) -> str:
     """主入口：拆分PDF文件
 
@@ -280,6 +281,7 @@ def split_pdf(
         volume_patterns: 自定义卷级正则列表
         chapter_patterns: 自定义章级正则列表
         skip_patterns: 自定义跳过正则列表
+        hierarchical: 是否按书籍/卷/章层级建立目录结构，章节生成markdown文件
 
     Returns:
         输出目录路径
@@ -337,28 +339,84 @@ def split_pdf(
     _log(f"\n共 {total_chapters} 个章节将被拆分\n")
 
     # 5. 拆分并保存
+    # 为书籍和卷分配编号（按首次出现顺序）
+    book_index: dict[str, int] = {}
+    volume_index: dict[str, int] = {}  # key = "book_name|volume_name"
+    for ch_node, _, _ in chapter_ranges:
+        if ch_node.book_name and ch_node.book_name not in book_index:
+            book_index[ch_node.book_name] = len(book_index) + 1
+        vol_key = f"{ch_node.book_name}|{ch_node.volume_name}"
+        if ch_node.volume_name and vol_key not in volume_index:
+            volume_index[vol_key] = len(volume_index) + 1
+
     for idx, (ch, start, end) in enumerate(chapter_ranges, 1):
         page_count = end - start + 1
         page_info = f"p.{start + 1}-{end + 1}({page_count}页)"
-        # 构建文件名：序号-书籍名-卷名-章节名-页码信息
-        parts = [f"{idx:03d}"]
-        if ch.book_name:
-            parts.append(sanitize_filename(ch.book_name))
-        if ch.volume_name:
-            parts.append(sanitize_filename(ch.volume_name))
-        parts.append(sanitize_filename(ch.title))
-        parts.append(page_info)
 
-        filename = "-".join(parts) + ".pdf"
-        out_path = os.path.join(output_dir, filename)
+        if hierarchical:
+            # ── 层级目录模式 ──
+            md_sub_parts: list[str] = []
+            if ch.book_name:
+                bi = book_index[ch.book_name]
+                md_sub_parts.append(f"{bi:03d}-{sanitize_filename(ch.book_name)}")
+            if ch.volume_name:
+                vol_key = f"{ch.book_name}|{ch.volume_name}"
+                vi = volume_index[vol_key]
+                md_sub_parts.append(f"{vi:03d}-{sanitize_filename(ch.volume_name)}")
+            md_dir = os.path.join(output_dir, *md_sub_parts) if md_sub_parts else output_dir
+            os.makedirs(md_dir, exist_ok=True)
 
-        # 提取页面范围
-        new_doc = fitz.open()
-        new_doc.insert_pdf(doc, from_page=start, to_page=end)
-        new_doc.save(out_path)
-        new_doc.close()
+            # PDF 统一放在 output_dir/pdf 子目录
+            pdf_dir = os.path.join(output_dir, "pdf")
+            os.makedirs(pdf_dir, exist_ok=True)
 
-        _log(f"  [{idx:03d}] p.{start + 1}-{end + 1} ({page_count}页) → {filename}")
+            safe_title = sanitize_filename(ch.title)
+            # PDF 文件
+            pdf_filename = f"{idx:03d}-{safe_title}.pdf"
+            pdf_out_path = os.path.join(pdf_dir, pdf_filename)
+
+            new_doc = fitz.open()
+            new_doc.insert_pdf(doc, from_page=start, to_page=end)
+            new_doc.save(pdf_out_path)
+            new_doc.close()
+
+            # Markdown 文件
+            md_filename = f"{idx:03d}-{safe_title}.md"
+            md_out_path = os.path.join(md_dir, md_filename)
+            # 计算从 md 文件到 pdf 文件的相对路径
+            pdf_rel = os.path.relpath(pdf_out_path, md_dir)
+            md_lines = [f"# {ch.title}", ""]
+            if ch.book_name:
+                md_lines.append(f"- **所属书籍**: {ch.book_name}")
+            if ch.volume_name:
+                md_lines.append(f"- **所属卷**: {ch.volume_name}")
+            md_lines.append(f"- **页码范围**: {start + 1} - {end + 1} ({page_count}页)")
+            md_lines.append(f"- **对应PDF**: [{pdf_filename}]({pdf_rel})")
+            md_lines.append("")
+            with open(md_out_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(md_lines))
+
+            md_rel_path = os.path.relpath(md_out_path, output_dir)
+            _log(f"  [{idx:03d}] {page_info} -> {md_rel_path}")
+        else:
+            # ── 扁平模式（原有逻辑） ──
+            parts = [f"{idx:03d}"]
+            if ch.book_name:
+                parts.append(sanitize_filename(ch.book_name))
+            if ch.volume_name:
+                parts.append(sanitize_filename(ch.volume_name))
+            parts.append(sanitize_filename(ch.title))
+            parts.append(page_info)
+
+            filename = "-".join(parts) + ".pdf"
+            out_path = os.path.join(output_dir, filename)
+
+            new_doc = fitz.open()
+            new_doc.insert_pdf(doc, from_page=start, to_page=end)
+            new_doc.save(out_path)
+            new_doc.close()
+
+            _log(f"  [{idx:03d}] {page_info} -> {filename}")
         if on_progress:
             on_progress(idx, total_chapters)
 

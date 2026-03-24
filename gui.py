@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -51,6 +52,7 @@ class SplitWorker(QThread):
         volume_patterns: list[str] | None = None,
         chapter_patterns: list[str] | None = None,
         skip_patterns: list[str] | None = None,
+        hierarchical: bool = False,
     ):
         super().__init__()
         self.pdf_path = pdf_path
@@ -59,6 +61,7 @@ class SplitWorker(QThread):
         self.volume_patterns = volume_patterns
         self.chapter_patterns = chapter_patterns
         self.skip_patterns = skip_patterns
+        self.hierarchical = hierarchical
 
     def run(self):
         try:
@@ -71,6 +74,7 @@ class SplitWorker(QThread):
                 volume_patterns=self.volume_patterns,
                 chapter_patterns=self.chapter_patterns,
                 skip_patterns=self.skip_patterns,
+                hierarchical=self.hierarchical,
             )
             self.finished_signal.emit(result)
         except Exception as e:
@@ -163,6 +167,13 @@ class MainWindow(QMainWindow):
         patterns_layout.addWidget(self.skip_pat_edit)
 
         layout.addWidget(patterns_group)
+
+        # --- 输出选项 ---
+        self.chk_hierarchical = QCheckBox(
+            "按书籍/卷/章层级建立文件夹，章节同时生成 Markdown 文件"
+        )
+        self.chk_hierarchical.setChecked(True)
+        layout.addWidget(self.chk_hierarchical)
 
         # --- 操作按钮 ---
         btn_row = QHBoxLayout()
@@ -286,6 +297,7 @@ class MainWindow(QMainWindow):
             volume_patterns=volume_pats or None,
             chapter_patterns=chapter_pats or None,
             skip_patterns=skip_pats or None,
+            hierarchical=self.chk_hierarchical.isChecked(),
         )
         self.worker.log_signal.connect(self._append_log)
         self.worker.progress_signal.connect(self._update_progress)
