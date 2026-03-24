@@ -384,7 +384,7 @@ def split_pdf(
             md_filename = f"{idx:03d}-{safe_title}.md"
             md_out_path = os.path.join(md_dir, md_filename)
             with open(md_out_path, "w", encoding="utf-8") as f:
-                f.write("")
+                f.write(f"{idx:03d}\n")
 
             md_rel_path = os.path.relpath(md_out_path, output_dir)
             _log(f"  [{idx:03d}] {page_info} -> {md_rel_path}")
